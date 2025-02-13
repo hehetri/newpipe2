@@ -8,7 +8,8 @@ async def get_video(video_url: str = Query(..., title="YouTube Video URL")):
     ydl_opts = {
         'format': 'best',
         'noplaylist': True,
-        'quiet': True
+        'quiet': True,
+        'cookies': 'cookies.txt'  # Adicionando os cookies do navegador
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
