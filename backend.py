@@ -5,12 +5,12 @@ app = FastAPI()
 
 @app.get("/video/")
 async def get_video(video_url: str = Query(..., title="YouTube Video URL")):
-    ydl_opts = {
-        'format': 'best',
-        'noplaylist': True,
-        'quiet': True,
-        'cookies': 'cookies.txt'  # Adicionando os cookies do navegador
-    }
+  ydl_opts = {
+    'format': 'best',
+    'noplaylist': True,
+    'quiet': True,
+    'cookiefile': 'cookies.txt'  # Carregar cookies do arquivo
+}
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         try:
