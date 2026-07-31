@@ -18,9 +18,24 @@ function absoluteUrl(value, base = config.siteBase) {
 function slugFromUrl(value) {
   try {
     const parts = new URL(value).pathname.split("/").filter(Boolean);
-    const index = parts.indexOf("assista");
-    return decodeURIComponent(parts[index >= 0 ? index + 1 : parts.length - 1] || "").toLowerCase();
+    const assistaIndex = parts.indexOf("assista");
+    if (assistaIndex >= 0) return decodeURIComponent(parts[assistaIndex + 1] || "").toLowerCase();
+
+    const assistirIndex = parts.indexOf("assistir");
+    if (assistirIndex >= 0) {
+      const tail = parts.slice(assistirIndex + 1);
+      return decodeURIComponent(tail.at(-1) || "").toLowerCase();
+    }
+
+    return decodeURIComponent(parts.at(-1) || "").toLowerCase();
   } catch { return ""; }
+}
+
+function isContentUrl(value) {
+  try {
+    const pathname = new URL(value).pathname;
+    return /\/(?:assista|assistir)(?:\/|$)/i.test(pathname);
+  } catch { return false; }
 }
 
 function contentId(category, slug) {
@@ -102,7 +117,7 @@ async function scrapeCategory(category, force = false) {
     let added = 0;
     $('a[href]').each((_, anchor) => {
       const href = absoluteUrl($(anchor).attr("href"), parsed.finalUrl);
-      if (!href || !/\/assista\//i.test(href)) return;
+      if (!href || !isContentUrl(href)) return;
       const slug = slugFromUrl(href);
       if (!slug || config.ignoredSlugs.includes(slug)) return;
 
@@ -367,7 +382,7 @@ function buildVideos(item) {
 
 const manifest = {
   id: "com.noveflix.catalog",
-  version: "3.0.0",
+  version: "3.0.1",
   name: "NoveFlix",
   description: "Catálogo automático do NoveFlix",
   logo: config.defaultPoster,
@@ -457,4 +472,4 @@ builder.defineStreamHandler(async ({ type, id }) => {
 });
 
 serveHTTP(builder.getInterface(), { port: config.port });
-console.log(`NoveFlix 3.0 iniciado em http://127.0.0.1:${config.port}/manifest.json`);
+console.log(`NoveFlix 3.0.1 iniciado em http://127.0.0.1:${config.port}/manifest.json`);
