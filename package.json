@@ -1,0 +1,16 @@
+{
+  "name": "noveflix-stremio-addon",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Addon Stremio para catálogo autorizado do NoveFlix",
+  "main": "addon.js",
+  "scripts": {
+    "start": "node addon.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "stremio-addon-sdk": "^1.6.10"
+  }
+}
