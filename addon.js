@@ -32,7 +32,6 @@ async function urlExists(url) {
 
     if (response.ok) return true;
 
-    // Alguns CDNs não aceitam HEAD. Tenta baixar somente um byte.
     if ([403, 405, 501].includes(response.status)) {
       response = await fetch(url, {
         method: "GET",
@@ -83,9 +82,23 @@ function buildVideos(latest) {
   return videos;
 }
 
+function catalogMeta() {
+  return {
+    id: show.id,
+    type: show.type,
+    name: show.name,
+    poster: show.poster,
+    posterShape: "poster",
+    background: show.background,
+    description: show.description,
+    genres: show.genres,
+    releaseInfo: show.releaseInfo
+  };
+}
+
 const manifest = {
   id: "com.noveflix.catalog",
-  version: "1.0.0",
+  version: "1.0.1",
   name: "NoveFlix",
   description: "Catálogo autorizado do NoveFlix",
   logo: show.poster,
@@ -93,34 +106,42 @@ const manifest = {
   resources: ["catalog", "meta", "stream"],
   types: ["series"],
   idPrefixes: ["noveflix:"],
+  behaviorHints: {
+    configurable: false,
+    configurationRequired: false,
+    newEpisodeNotifications: true
+  },
   catalogs: [
     {
       type: "series",
       id: "noveflix-series",
-      name: "NoveFlix"
+      name: "NoveFlix",
+      pageSize: 50,
+      extra: [
+        { name: "search", isRequired: false },
+        { name: "skip", isRequired: false }
+      ]
     }
   ]
 };
 
 const builder = new addonBuilder(manifest);
 
-builder.defineCatalogHandler(async ({ type, id }) => {
+builder.defineCatalogHandler(async ({ type, id, extra = {} }) => {
   if (type !== "series" || id !== "noveflix-series") return { metas: [] };
 
-  return {
-    metas: [
-      {
-        id: show.id,
-        type: show.type,
-        name: show.name,
-        poster: show.poster,
-        background: show.background,
-        description: show.description,
-        genres: show.genres,
-        releaseInfo: show.releaseInfo
-      }
-    ]
-  };
+  let metas = [catalogMeta()];
+
+  const search = String(extra.search || "").trim().toLowerCase();
+  if (search) {
+    metas = metas.filter((item) =>
+      item.name.toLowerCase().includes(search) ||
+      item.description.toLowerCase().includes(search)
+    );
+  }
+
+  const skip = Math.max(0, Number.parseInt(extra.skip || "0", 10) || 0);
+  return { metas: metas.slice(skip, skip + 50) };
 });
 
 builder.defineMetaHandler(async ({ type, id }) => {
@@ -129,14 +150,7 @@ builder.defineMetaHandler(async ({ type, id }) => {
   const latest = await discoverLatestEpisode();
   return {
     meta: {
-      id: show.id,
-      type: show.type,
-      name: show.name,
-      poster: show.poster,
-      background: show.background,
-      description: show.description,
-      genres: show.genres,
-      releaseInfo: show.releaseInfo,
+      ...catalogMeta(),
       videos: buildVideos(latest)
     }
   };
