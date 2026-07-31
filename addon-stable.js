@@ -7,8 +7,8 @@ const config = require("./config");
 const catalogCache = new Map();
 const detailCache = new Map();
 
-const clean = (v = "") => String(v).replace(/\s+/g, " ").trim();
-const pad = (n) => String(n).padStart(3, "0");
+const clean = (value = "") => String(value).replace(/\s+/g, " ").trim();
+const pad = (number) => String(number).padStart(3, "0");
 
 function abs(value, base = config.siteBase) {
   if (!value) return null;
@@ -34,12 +34,7 @@ function episodeId(item, episode) { return `${item.id}:1:${episode}`; }
 function parseId(id) {
   const parts = String(id).split(":");
   if (parts[0] !== "noveflix" || parts.length < 3) return null;
-  return {
-    category: parts[1],
-    slug: parts[2],
-    season: Number(parts[3]),
-    episode: Number(parts[4])
-  };
+  return { category: parts[1], slug: parts[2], season: Number(parts[3]), episode: Number(parts[4]) };
 }
 
 function categoryByKey(key) {
@@ -53,7 +48,9 @@ async function fetchText(url, options = {}) {
     signal: AbortSignal.timeout(options.timeout || config.requestTimeoutMs),
     headers: {
       "user-agent": config.userAgent,
+      accept: "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
       "accept-language": "pt-BR,pt;q=0.9,en;q=0.7",
+      referer: options.referer || config.siteBase,
       ...(options.headers || {})
     }
   });
@@ -101,7 +98,7 @@ async function scrapeCategory(category, force = false) {
 
     const $ = cheerio.load(response.text);
     let added = 0;
-    $('a[href]').each((_, anchor) => {
+    $("a[href]").each((_, anchor) => {
       const pageUrl = abs($(anchor).attr("href"), response.finalUrl);
       if (!pageUrl || !isContentUrl(pageUrl)) return;
       const slug = slugFromUrl(pageUrl);
@@ -111,12 +108,8 @@ async function scrapeCategory(category, force = false) {
       const name = cardTitle($, anchor, slug);
       const image = cardImage($, anchor, response.finalUrl);
       found.set(slug, {
-        id: contentId(category.key, slug),
-        category: category.key,
-        slug,
-        pageUrl,
-        type: category.type,
-        episodic: category.episodic,
+        id: contentId(category.key, slug), category: category.key, slug, pageUrl,
+        type: category.type, episodic: category.episodic,
         name: previous?.name && previous.name.length > name.length ? previous.name : name,
         poster: previous?.poster || image,
         background: previous?.background || image,
@@ -130,11 +123,7 @@ async function scrapeCategory(category, force = false) {
 
   for (const fallback of config.fallbackShows.filter((item) => item.category === category.key)) {
     if (!found.has(fallback.slug)) {
-      found.set(fallback.slug, {
-        ...fallback,
-        id: contentId(category.key, fallback.slug),
-        genres: [fallback.genre || category.genre]
-      });
+      found.set(fallback.slug, { ...fallback, id: contentId(category.key, fallback.slug), genres: [fallback.genre || category.genre] });
     }
   }
 
@@ -144,48 +133,108 @@ async function scrapeCategory(category, force = false) {
   return value;
 }
 
+function decodeBase64Url(value) {
+  if (!value) return null;
+  try {
+    const normalized = decodeURIComponent(value).replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized + "=".repeat((4 - normalized.length % 4) % 4);
+    const decoded = Buffer.from(padded, "base64").toString("utf8").trim();
+    if (/^https?:\/\//i.test(decoded)) return decoded;
+    try {
+      const data = JSON.parse(decoded);
+      return data.safelink || data.second_safelink_url || data.url || null;
+    } catch { return null; }
+  } catch { return null; }
+}
+
+function decodeRedirect(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    for (const [key, value] of url.searchParams) {
+      if (/safelink|redirect|url|target/i.test(key)) {
+        const decoded = decodeBase64Url(value);
+        if (decoded) return decoded;
+      }
+    }
+    const rawQuery = url.search.slice(1);
+    if (rawQuery && !rawQuery.includes("=")) {
+      const decoded = decodeBase64Url(rawQuery);
+      if (decoded) return decoded;
+    }
+  } catch {}
+  return rawUrl;
+}
+
 function extractUrls(html, base) {
   const urls = new Set();
   const $ = cheerio.load(html);
-  $('[href],[src],[data-src],[data-url]').each((_, el) => {
-    for (const attr of ["href", "src", "data-src", "data-url"]) {
+  $("[href],[src],[data-src],[data-url],[data-href]").each((_, el) => {
+    for (const attr of ["href", "src", "data-src", "data-url", "data-href"]) {
       const url = abs($(el).attr(attr), base);
-      if (url) urls.add(url);
+      if (url) {
+        urls.add(url);
+        const decoded = decodeRedirect(url);
+        if (decoded !== url) urls.add(decoded);
+      }
     }
   });
+
   for (const match of html.match(/https?:\\?\/\\?\/[A-Za-z0-9._~:/?#[\]@!$&'()*+,;=%-]+/g) || []) {
-    urls.add(match.replace(/\\\//g, "/").replace(/&amp;/g, "&"));
+    const url = match.replace(/\\\//g, "/").replace(/&amp;/g, "&");
+    urls.add(url);
+    const decoded = decodeRedirect(url);
+    if (decoded !== url) urls.add(decoded);
+  }
+
+  for (const match of html.match(/[A-Za-z0-9_-]{28,}={0,2}/g) || []) {
+    const decoded = decodeBase64Url(match);
+    if (decoded) urls.add(decoded);
   }
   return [...urls];
 }
 
 function directMedia(html, base) {
+  const normalized = String(html).replace(/\\\//g, "/").replace(/&amp;/g, "&");
   const patterns = [
     /(?:file|src|url)\s*[:=]\s*["']([^"']+\.(?:mp4|m3u8)(?:\?[^"']*)?)["']/gi,
-    /["'](https?:\\?\/\\?\/[^"']+\.(?:mp4|m3u8)(?:\?[^"']*)?)["']/gi
+    /["'](https?:\/\/[^"']+\.(?:mp4|m3u8)(?:\?[^"']*)?)["']/gi,
+    /(https?:\/\/[^\s"'<>]+\.(?:mp4|m3u8)(?:\?[^\s"'<>]*)?)/gi
   ];
   for (const pattern of patterns) {
     let match;
-    while ((match = pattern.exec(html))) {
-      const url = abs(match[1].replace(/\\\//g, "/").replace(/&amp;/g, "&"), base);
+    while ((match = pattern.exec(normalized))) {
+      const url = abs(match[1], base);
       if (url) return url;
     }
   }
   return null;
 }
 
-async function resolveMedia(url, depth = 0) {
-  if (!url || depth > 3) return null;
+async function resolveMedia(rawUrl, depth = 0, referer = config.siteBase) {
+  if (!rawUrl || depth > 5) return null;
+  const url = decodeRedirect(rawUrl);
   if (/\.(mp4|m3u8)(\?|$)/i.test(url)) return url;
+
   try {
-    const page = await fetchText(url);
+    const page = await fetchText(url, { referer });
     const direct = directMedia(page.text, page.finalUrl);
     if (direct) return direct;
-    const nested = extractUrls(page.text, page.finalUrl).find((item) =>
-      /novefx\.biz\/v\//i.test(item) || /\.(mp4|m3u8)(\?|$)/i.test(item)
-    );
-    return nested ? resolveMedia(nested, depth + 1) : null;
-  } catch { return null; }
+
+    const candidates = extractUrls(page.text, page.finalUrl)
+      .filter((item) => item !== url && (
+        /painel\d*\.novefx\.biz\/v\//i.test(item) ||
+        /esportesdavez\.com/i.test(item) ||
+        /\.(mp4|m3u8)(\?|$)/i.test(item)
+      ));
+
+    for (const candidate of candidates.slice(0, config.maxPlayerCandidates)) {
+      const media = await resolveMedia(candidate, depth + 1, page.finalUrl);
+      if (media) return media;
+    }
+  } catch (error) {
+    console.warn(`Falha ao resolver player ${url}: ${error.message}`);
+  }
+  return null;
 }
 
 function mediaPattern(url) {
@@ -193,12 +242,7 @@ function mediaPattern(url) {
     const parsed = new URL(url);
     const match = parsed.pathname.match(/^(.*\/)([^/]+)-(\d+)\.(mp4|m3u8)$/i);
     if (!match) return null;
-    return {
-      basePath: `${parsed.origin}${match[1]}`,
-      code: match[2],
-      currentEpisode: Number(match[3]),
-      extension: match[4].toLowerCase()
-    };
+    return { basePath: `${parsed.origin}${match[1]}`, code: match[2], currentEpisode: Number(match[3]), extension: match[4].toLowerCase() };
   } catch { return null; }
 }
 
@@ -209,18 +253,16 @@ function episodeUrl(pattern, episode) {
 async function urlExists(url) {
   try {
     let response = await fetch(url, {
-      method: "HEAD",
-      redirect: "follow",
+      method: "HEAD", redirect: "follow",
       signal: AbortSignal.timeout(config.mediaCheckTimeoutMs),
-      headers: { "user-agent": config.userAgent }
+      headers: { "user-agent": config.userAgent, referer: config.siteBase }
     });
     if (response.ok) return true;
     if ([403, 405, 501].includes(response.status)) {
       response = await fetch(url, {
-        method: "GET",
-        redirect: "follow",
+        method: "GET", redirect: "follow",
         signal: AbortSignal.timeout(config.mediaCheckTimeoutMs),
-        headers: { "user-agent": config.userAgent, Range: "bytes=0-0" }
+        headers: { "user-agent": config.userAgent, referer: config.siteBase, Range: "bytes=0-0" }
       });
       return response.ok || response.status === 206;
     }
@@ -252,22 +294,21 @@ async function details(categoryKey, slug, force = false) {
   try {
     const page = await fetchText(base.pageUrl);
     const $ = cheerio.load(page.text);
-    const name = clean(metaValue($, ['meta[property="og:title"]', 'meta[name="twitter:title"]']) || $('h1').first().text() || base.name)
-      .replace(/\s*[|–-]\s*NoveFlix.*$/i, "");
-    const description = clean(metaValue($, ['meta[property="og:description"]', 'meta[name="description"]']) || $('.sinopse,.synopsis,.description,.entry-content p').first().text() || base.description);
+    const name = clean(metaValue($, ['meta[property="og:title"]', 'meta[name="twitter:title"]']) || $("h1").first().text() || base.name)
+      .replace(/^Assistir\s+/i, "").replace(/\s+Online(?:\s+Grátis)?$/i, "").replace(/\s*[|–-]\s*NoveFlix.*$/i, "");
+    const description = clean(metaValue($, ['meta[property="og:description"]', 'meta[name="description"]']) || $(".sinopse,.synopsis,.description,.entry-content p").first().text() || base.description);
     const poster = abs(metaValue($, ['meta[property="og:image"]', 'meta[name="twitter:image"]', 'link[rel="image_src"]']) || base.poster, page.finalUrl);
     const background = abs(metaValue($, ['meta[property="og:image:secure_url"]', 'meta[property="og:image"]']) || poster, page.finalUrl);
     const year = clean(page.text).match(/(?:19|20)\d{2}/)?.[0];
-
     value = { ...value, name, description, poster, background, releaseInfo: year };
 
     let mediaUrl = directMedia(page.text, page.finalUrl);
     if (!mediaUrl) {
       const candidates = extractUrls(page.text, page.finalUrl).filter((item) =>
-        /novefx\.biz\/v\//i.test(item) || /esportesdavez\.com/i.test(item) || /\.(mp4|m3u8)(\?|$)/i.test(item)
+        /painel\d*\.novefx\.biz\/v\//i.test(item) || /esportesdavez\.com/i.test(item) || /\.(mp4|m3u8)(\?|$)/i.test(item)
       );
       for (const candidate of candidates.slice(0, config.maxPlayerCandidates)) {
-        mediaUrl = await resolveMedia(candidate);
+        mediaUrl = await resolveMedia(candidate, 0, page.finalUrl);
         if (mediaUrl) break;
       }
     }
@@ -276,6 +317,7 @@ async function details(categoryKey, slug, force = false) {
       value.mediaUrl = mediaUrl;
       value.pattern = category.episodic ? mediaPattern(mediaUrl) : null;
       value.latestEpisode = value.pattern ? await latestEpisode(value.pattern) : null;
+      console.log(`Player localizado: ${value.name} -> ${mediaUrl}`);
     } else {
       console.warn(`Player ainda não localizado para ${value.name}; metadados serão exibidos mesmo assim.`);
     }
@@ -289,41 +331,30 @@ async function details(categoryKey, slug, force = false) {
 
 function toMeta(item) {
   return {
-    id: item.id,
-    type: item.type,
-    name: item.name,
-    poster: item.poster || config.defaultPoster,
-    posterShape: "poster",
+    id: item.id, type: item.type, name: item.name,
+    poster: item.poster || config.defaultPoster, posterShape: "poster",
     background: item.background || item.poster || config.defaultBackground,
     description: item.description || `Assista ${item.name} no NoveFlix.`,
-    genres: item.genres || [],
-    releaseInfo: item.releaseInfo
+    genres: item.genres || [], releaseInfo: item.releaseInfo
   };
 }
 
 function videos(item) {
   if (!item.episodic || !item.pattern || !item.latestEpisode) return [];
-  return Array.from({ length: item.latestEpisode }, (_, i) => {
-    const episode = i + 1;
+  return Array.from({ length: item.latestEpisode }, (_, index) => {
+    const episode = index + 1;
     return { id: episodeId(item, episode), title: `Episódio ${episode}`, season: 1, episode };
   });
 }
 
 const manifest = {
-  id: "com.noveflix.catalog",
-  version: "3.0.2",
-  name: "NoveFlix",
+  id: "com.noveflix.catalog", version: "3.1.0", name: "NoveFlix",
   description: "Catálogo automático do NoveFlix",
-  logo: config.defaultPoster,
-  background: config.defaultBackground,
-  resources: ["catalog", "meta", "stream"],
-  types: ["movie", "series"],
-  idPrefixes: ["noveflix:"],
+  logo: config.defaultPoster, background: config.defaultBackground,
+  resources: ["catalog", "meta", "stream"], types: ["movie", "series"], idPrefixes: ["noveflix:"],
   behaviorHints: { configurable: false, configurationRequired: false, newEpisodeNotifications: true },
   catalogs: config.categories.map((category) => ({
-    type: category.type,
-    id: `noveflix-${category.key}`,
-    name: category.name,
+    type: category.type, id: `noveflix-${category.key}`, name: category.name,
     pageSize: config.pageSize,
     extra: [{ name: "search", isRequired: false }, { name: "skip", isRequired: false }]
   }))
@@ -377,8 +408,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     }
     if (!item.pattern || !Number.isInteger(parsed.episode) || parsed.episode < 1 || parsed.episode > item.latestEpisode) return { streams: [] };
     return { streams: [{
-      name: "NoveFlix",
-      title: `${item.name} — Episódio ${parsed.episode}`,
+      name: "NoveFlix", title: `${item.name} — Episódio ${parsed.episode}`,
       url: episodeUrl(item.pattern, parsed.episode),
       behaviorHints: { bingeGroup: `${item.id}:season:1` }
     }] };
@@ -389,4 +419,4 @@ builder.defineStreamHandler(async ({ type, id }) => {
 });
 
 serveHTTP(builder.getInterface(), { port: config.port });
-console.log(`NoveFlix 3.0.2 iniciado em http://127.0.0.1:${config.port}/manifest.json`);
+console.log(`NoveFlix 3.1.0 iniciado em http://127.0.0.1:${config.port}/manifest.json`);
