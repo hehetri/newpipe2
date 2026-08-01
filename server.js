@@ -82,7 +82,7 @@ function buildVideos(item) {
 
 const manifest = {
   id: "com.noveflix.library.v4",
-  version: "4.0.0",
+  version: "4.0.1",
   name: "NoveFlix",
   description: "Biblioteca autorizada do NoveFlix com catálogo, metadados e streams via API própria.",
   logo: config.defaultPoster,
@@ -135,12 +135,8 @@ builder.defineMetaHandler(async ({ type, id }) => {
   try {
     const item = await loadItem(parsed.category, parsed.postId);
     const meta = toMeta(item);
-
-    if (category.episodic) {
-      meta.videos = buildVideos(item);
-    }
-
-    console.log(`Meta: ${id} (${meta.videos?.length || 0} episódios, ${item.media.length} fontes)`);
+    if (category.episodic) meta.videos = buildVideos(item);
+    console.log(`Meta: ${id} (${meta.videos?.length || 0} episódios, ${item.media.length} fontes, ${item.player_count || 0} players brutos)`);
     return { meta };
   } catch (error) {
     console.error(`Meta ${id}: ${error.stack || error.message}`);
@@ -184,9 +180,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
         name: "NoveFlix",
         title: `${item.title} — T${parsed.season} E${parsed.episode}`,
         url: episodeUrl(pattern, parsed.episode),
-        behaviorHints: {
-          bingeGroup: `${metaId(item.category, item.id)}:season:${parsed.season}`
-        }
+        behaviorHints: { bingeGroup: `${metaId(item.category, item.id)}:season:${parsed.season}` }
       }]
     };
   } catch (error) {
@@ -196,5 +190,9 @@ builder.defineStreamHandler(async ({ type, id }) => {
 });
 
 serveHTTP(builder.getInterface(), { port: config.port });
-console.log(`NoveFlix 4.0.0 iniciado em http://127.0.0.1:${config.port}/manifest.json`);
+console.log(`NoveFlix 4.0.1 iniciado em http://127.0.0.1:${config.port}/manifest.json`);
 console.log(`Bridge: ${config.bridgeUrl}`);
+
+bridge.health()
+  .then((result) => console.log(`Bridge OK: ${JSON.stringify(result.counts || result)}`))
+  .catch((error) => console.error(`Bridge indisponível: ${error.message}`));
