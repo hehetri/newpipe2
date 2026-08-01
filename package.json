@@ -1,12 +1,12 @@
 {
   "name": "noveflix-stremio-addon",
-  "version": "4.2.1",
+  "version": "4.2.2",
   "private": true,
-  "description": "Addon Stremio NoveFlix sem plugin externo, usando capas reais do site",
-  "main": "src/index-v421.js",
+  "description": "Addon Stremio NoveFlix sem plugin externo, com metadata resiliente e capas do site",
+  "main": "src/index-v422.js",
   "scripts": {
-    "start": "node src/index-v421.js",
-    "check": "node --check src/index.js && node --check src/index-v421.js && node --check src/resolver.js && node --check src/http.js && node --check src/config.js"
+    "start": "node src/index-v422.js",
+    "check": "node --check src/index.js && node --check src/index-v421.js && node --check src/index-v422.js && node --check src/resolver.js && node --check src/http.js && node --check src/config.js"
   },
   "engines": {
     "node": ">=20 <23"
