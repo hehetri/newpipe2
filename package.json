@@ -1,17 +1,17 @@
 {
   "name": "noveflix-stremio-addon",
-  "version": "3.1.5",
+  "version": "4.0.0",
   "private": true,
-  "description": "Addon Stremio automático para o catálogo autorizado do NoveFlix",
-  "main": "addon-v315.js",
+  "description": "Addon Stremio do catálogo autorizado do NoveFlix, alimentado por uma API WordPress própria",
+  "main": "server.js",
   "scripts": {
-    "start": "node addon-v315.js"
+    "start": "node server.js",
+    "check": "node --check server.js && node --check lib/media-resolver.js && node --check lib/bridge-client.js"
   },
   "engines": {
     "node": ">=20 <23"
   },
   "dependencies": {
-    "cheerio": "^1.0.0",
     "stremio-addon-sdk": "^1.6.10"
   }
 }
