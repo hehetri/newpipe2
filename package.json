@@ -6,7 +6,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "check": "node --check server.js && node --check lib/media-resolver.js && node --check lib/bridge-client.js"
+    "check": "node --check server.js && node --check lib/media-resolver.js && node --check lib/bridge-client.js && node --check scripts/audit-library.js",
+    "audit": "node scripts/audit-library.js"
   },
   "engines": {
     "node": ">=20 <23"
