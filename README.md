@@ -62,3 +62,13 @@ noveflix:novelas-1234:1:1
 ```
 
 Isso evita a interpretação incorreta de IDs pelo Fusion e mantém os links estáveis mesmo quando o título muda.
+
+## Auditoria integral
+
+Depois de instalar o plugin e configurar a ponte, execute no Render Shell:
+
+```text
+npm run audit
+```
+
+O comando percorre todas as categorias, resolve os players e cria `audit-report.json` com os itens reproduzíveis e os que ainda não possuem fonte cadastrada no WordPress.
