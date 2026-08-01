@@ -2,12 +2,14 @@
 
 const cheerio = require("cheerio");
 const config = require("./config");
-const { fetchText, urlExists } = require("./http");
-const { TTLCache } = require("./cache");
+const { fetchText, urlExists, mapWithConcurrency } = require("./http");
+const { TTLCache, SingleFlight, deadline } = require("./cache");
 
-const resolverCache = new TTLCache(config.resolverCacheMs);
+const resolverCache = new TTLCache(config.resolverCacheMs, config.resolverStaleMs);
+const resolverFlight = new SingleFlight();
 let browserPromise = null;
 let browserQueue = Promise.resolve();
+let browserDisabledReason = null;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -243,14 +245,35 @@ function mergeSources(sources) {
   );
 }
 
-async function discoverLatest(source) {
+/**
+ * Sonda o CDN em paralelo para descobrir até onde vão os episódios.
+ * Sequencial isso levava minutos; em janelas paralelas leva segundos e
+ * respeita o orçamento da requisição.
+ */
+async function discoverLatest(source, budget) {
   if (!source || source.kind !== "pattern") return source;
   let latest = Math.max(1, Number(source.latestEpisode || source.currentEpisode || 1));
   const limit = latest + config.maxFutureEpisodeChecks;
-  for (let candidate = latest + 1; candidate <= limit; candidate += 1) {
-    if (!(await urlExists(episodeUrl(source, candidate)))) break;
-    latest = candidate;
+  const window = Math.max(1, config.episodeProbeConcurrency);
+
+  while (latest < limit) {
+    if (budget?.expired()) break;
+    const batch = [];
+    for (let candidate = latest + 1; candidate <= Math.min(limit, latest + window); candidate += 1) batch.push(candidate);
+    if (!batch.length) break;
+
+    const timeout = budget ? Math.min(config.mediaCheckTimeoutMs, Math.max(1500, budget.remaining())) : config.mediaCheckTimeoutMs;
+    const found = await mapWithConcurrency(batch, window, (candidate) => urlExists(episodeUrl(source, candidate), timeout));
+
+    let advanced = 0;
+    for (const exists of found) {
+      if (exists !== true) break;
+      advanced += 1;
+    }
+    latest += advanced;
+    if (advanced < batch.length) break;
   }
+
   return { ...source, latestEpisode: latest };
 }
 
@@ -262,6 +285,7 @@ function promisingUrl(url) {
 
 async function resolveCandidate(rawUrl, label = "", depth = 0, seen = new Set(), budget = { fetches: 0 }) {
   if (!rawUrl || depth > 5 || budget.fetches > 45) return [];
+  if (budget.clock?.expired()) return [];
   const results = [];
 
   for (const expanded of expandEncodedValue(rawUrl)) {
@@ -278,10 +302,12 @@ async function resolveCandidate(rawUrl, label = "", depth = 0, seen = new Set(),
   budget.fetches += 1;
 
   try {
-    const page = await fetchText(url, { referer: config.siteBase + "/" });
+    const timeout = budget.clock ? Math.min(config.requestTimeoutMs, Math.max(2000, budget.clock.remaining())) : config.requestTimeoutMs;
+    const page = await fetchText(url, { referer: config.siteBase + "/", timeout, retries: 1 });
     const candidates = collectCandidates(page.text, page.finalUrl);
     for (const candidate of candidates.slice(0, 80)) {
       if (!promisingUrl(candidate.url)) continue;
+      if (budget.clock?.expired()) break;
       results.push(...await resolveCandidate(candidate.url, candidate.label || label, depth + 1, seen, budget));
       if (results.length >= 8) break;
     }
@@ -290,18 +316,19 @@ async function resolveCandidate(rawUrl, label = "", depth = 0, seen = new Set(),
   return mergeSources(results);
 }
 
-async function resolveFromWordPress(pageUrl, contentKey) {
+async function resolveFromWordPress(pageUrl, contentKey, budget = { fetches: 0 }) {
   const results = [];
   try {
     const parsed = new URL(pageUrl);
     const slug = parsed.pathname.split("/").filter(Boolean).at(-1) || contentKey.split("-").slice(1).join("-");
     const searchTerm = slug.replace(/-/g, " ");
     const searchUrl = `${parsed.origin}/wp-json/wp/v2/search?search=${encodeURIComponent(searchTerm)}&per_page=20`;
-    const searchResponse = await fetchText(searchUrl, { referer: pageUrl });
+    const searchResponse = await fetchText(searchUrl, { referer: pageUrl, retries: 1 });
     const entries = JSON.parse(searchResponse.text);
     if (!Array.isArray(entries)) return [];
 
     for (const entry of entries.slice(0, 10)) {
+      if (budget.clock?.expired()) break;
       const urls = new Set();
       if (entry?.url) urls.add(entry.url);
       const self = entry?._links?.self;
@@ -311,11 +338,13 @@ async function resolveFromWordPress(pageUrl, contentKey) {
         for (const restBase of bases) urls.add(`${parsed.origin}/wp-json/wp/v2/${restBase}/${entry.id}?context=view`);
       }
       for (const url of urls) {
+        if (budget.clock?.expired()) break;
         try {
-          const response = await fetchText(url, { referer: pageUrl });
+          const response = await fetchText(url, { referer: pageUrl, retries: 1 });
           for (const candidate of collectCandidates(response.text, response.finalUrl)) {
             if (!promisingUrl(candidate.url)) continue;
-            results.push(...await resolveCandidate(candidate.url, candidate.label, 0));
+            if (budget.clock?.expired()) break;
+            results.push(...await resolveCandidate(candidate.url, candidate.label, 0, new Set(), budget));
           }
         } catch {}
       }
@@ -326,6 +355,8 @@ async function resolveFromWordPress(pageUrl, contentKey) {
 }
 
 async function browserInstance() {
+  if (!config.enableBrowser) throw new Error("navegador desabilitado (NOVEFLIX_BROWSER=0)");
+  if (browserDisabledReason) throw new Error(browserDisabledReason);
   if (!browserPromise) {
     browserPromise = (async () => {
       const puppeteer = require("puppeteer");
@@ -343,6 +374,11 @@ async function browserInstance() {
       });
     })().catch((error) => {
       browserPromise = null;
+      // Sem Chromium instalado (ou sem memória) o addon segue funcionando via HTTP.
+      if (/Could not find|ENOENT|Failed to launch|spawn/i.test(String(error.message))) {
+        browserDisabledReason = `navegador indisponível: ${error.message.split("\n")[0]}`;
+        console.warn(browserDisabledReason);
+      }
       throw error;
     });
   }
@@ -540,27 +576,30 @@ async function resolveWithBrowser(pageUrl) {
   }
 }
 
-async function resolvePlayers(pageUrl, contentKey) {
-  const cached = resolverCache.get(contentKey);
-  if (cached) return cached;
+async function resolveSources(pageUrl, contentKey, { budgetMs, deep }) {
+  const clock = deadline(budgetMs);
+  const budget = { fetches: 0, clock };
   const results = [];
 
   try {
-    const page = await fetchText(pageUrl);
+    const timeout = Math.min(config.requestTimeoutMs, Math.max(2500, clock.remaining()));
+    const page = await fetchText(pageUrl, { timeout, retries: 1 });
     for (const candidate of collectCandidates(page.text, page.finalUrl)) {
       if (!promisingUrl(candidate.url)) continue;
-      results.push(...await resolveCandidate(candidate.url, candidate.label, 0));
+      if (clock.expired()) break;
+      results.push(...await resolveCandidate(candidate.url, candidate.label, 0, new Set(), budget));
       if (results.length >= 8) break;
     }
   } catch (error) {
     console.warn(`Resolver HTTP ${contentKey}: ${error.message}`);
   }
 
-  if (!results.length) {
-    results.push(...await resolveFromWordPress(pageUrl, contentKey));
+  if (!results.length && !clock.expired()) {
+    results.push(...await resolveFromWordPress(pageUrl, contentKey, budget));
   }
 
-  if (!results.length) {
+  // O navegador é caro: só entra em requisições de stream e se sobrar tempo.
+  if (!results.length && deep && config.enableBrowser && clock.remaining() > 8000) {
     try { results.push(...await resolveWithBrowser(pageUrl)); }
     catch (error) { console.warn(`Resolver browser ${contentKey}: ${error.message}`); }
   }
@@ -570,17 +609,42 @@ async function resolvePlayers(pageUrl, contentKey) {
     if (fallback) results.push(fallback);
   }
 
+  const merged = mergeSources(results);
   const finalSources = [];
-  for (const source of mergeSources(results)) finalSources.push(await discoverLatest(source));
-  resolverCache.set(contentKey, finalSources);
+  for (const source of merged) finalSources.push(await discoverLatest(source, clock));
+
+  if (finalSources.length) resolverCache.set(contentKey, finalSources);
   return finalSources;
+}
+
+/**
+ * Resolve os players de um conteúdo respeitando um orçamento de tempo.
+ * `deep` libera o navegador headless (usado apenas em /stream).
+ */
+async function resolvePlayers(pageUrl, contentKey, options = {}) {
+  const { budgetMs = config.metaBudgetMs, deep = false } = options;
+  const cached = resolverCache.peek(contentKey);
+  if (cached?.fresh && cached.value.length) return cached.value;
+
+  const flightKey = `${deep ? "deep" : "fast"}:${contentKey}`;
+  const work = resolverFlight.run(flightKey, () => resolveSources(pageUrl, contentKey, { budgetMs, deep }));
+  work.catch((error) => console.warn(`Resolver ${contentKey}: ${error.message}`));
+
+  try {
+    const sources = await work;
+    if (sources.length) return sources;
+  } catch {}
+
+  return cached?.value || [];
 }
 
 module.exports = {
   resolvePlayers,
   episodeUrl,
+  discoverLatest,
   parseMediaUrl,
   parsePanelUrl,
   collectCandidates,
-  expandEncodedValue
+  expandEncodedValue,
+  resolverCache
 };

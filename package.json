@@ -1,18 +1,21 @@
 {
   "name": "noveflix-stremio-addon",
-  "version": "4.2.2",
+  "version": "4.3.0",
   "private": true,
-  "description": "Addon Stremio NoveFlix sem plugin externo, com metadata resiliente e capas do site",
-  "main": "src/index-v422.js",
+  "description": "Addon Stremio NoveFlix: catálogo via REST/HTML do site, metadados sempre respondidos e players resolvidos sob demanda",
+  "main": "src/index.js",
   "scripts": {
-    "start": "node src/index-v422.js",
-    "check": "node --check src/index.js && node --check src/index-v421.js && node --check src/index-v422.js && node --check src/resolver.js && node --check src/http.js && node --check src/config.js"
+    "start": "node src/index.js",
+    "check": "node --check src/index.js && node --check src/catalog.js && node --check src/parse.js && node --check src/resolver.js && node --check src/http.js && node --check src/cache.js && node --check src/config.js",
+    "selftest": "node scripts/selftest.js",
+    "audit": "node scripts/audit-library.js"
   },
   "engines": {
     "node": ">=20 <23"
   },
   "dependencies": {
     "cheerio": "^1.0.0",
+    "express": "^4.22.2",
     "puppeteer": "^24.16.0",
     "stremio-addon-sdk": "^1.6.10"
   }
