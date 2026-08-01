@@ -1,52 +1,64 @@
-# NoveFlix — addon para Stremio
+# NoveFlix Stremio 4.0
 
-Esta primeira versão adiciona **Quem Ama Cuida** como série e gera os links dos episódios usando o padrão:
+Esta versão elimina os patches por título (`QAC`, `ESC` etc.). O catálogo e os players são lidos diretamente do WordPress do NoveFlix por um plugin-ponte. O addon continua hospedado no Render.
 
-`https://23rzv4udpdbv8t6.cdn-novflix.com/storage1/QAC/QAC-063.mp4`
+## 1. Instalar o plugin no WordPress
 
-Use apenas com conteúdo que você possui ou está autorizado a distribuir.
+Arquivo: `noveflix-stremio-bridge.zip`
 
-## Testar no computador
+No WordPress:
 
-Instale o Node.js 18 ou superior. Abra o terminal dentro desta pasta e execute:
+1. Plugins → Adicionar novo → Enviar plugin.
+2. Instale e ative o ZIP.
+3. Abra Configurações → NoveFlix Stremio.
+4. O token é opcional. Deixe vazio para funcionar sem configurar segredo no Render.
 
-```bash
+O plugin lê posts públicos, categorias, imagens, conteúdo, campos personalizados e tabelas de player/stream/episode/video ligadas ao post. Ele identifica URLs diretas, SafeLinks/Base64 e links `painelN.novefx.biz/v/CODIGO123`.
+
+## 2. Configurar o Render
+
+Quando o plugin estiver no domínio padrão atual, basta fazer novo deploy. Para informar outro domínio, adicione:
+
+```text
+NOVEFLIX_BRIDGE_URL=https://SEU-DOMINIO/wp-json/noveflix-stremio/v1
+```
+
+Quando preencher um token no WordPress, adicione também:
+
+```text
+NOVEFLIX_BRIDGE_TOKEN=O_MESMO_TOKEN
+```
+
+Build command:
+
+```text
 npm install
+```
+
+Start command:
+
+```text
 npm start
 ```
 
-Depois, no Stremio, instale:
+## 3. Instalar no Stremio/Fusion
 
 ```text
-http://127.0.0.1:7000/manifest.json
+https://newpipe2.onrender.com/manifest.json
 ```
 
-## Configurar episódios
-
-Edite `config.js`:
-
-- `firstEpisode`: primeiro episódio exibido;
-- `knownLatestEpisode`: último episódio já confirmado;
-- `code` e `folder`: neste caso, `QAC`;
-- `cdnBase`: domínio do CDN;
-- `latestCacheMinutes`: intervalo para testar episódios novos.
-
-Quando o episódio 64 existir, o addon testa a URL `QAC-064.mp4` e passa a exibi-lo automaticamente. Depois testa 65, e assim por diante.
-
-## Colocar online
-
-O endereço remoto precisa usar HTTPS. Você pode hospedar esta pasta em um servidor Node.js, Railway, Render, VPS ou outro serviço compatível. Configure o comando de inicialização como:
-
-```bash
-npm start
-```
-
-A URL de instalação será parecida com:
+## Endpoints de teste
 
 ```text
-https://seu-addon.exemplo.com/manifest.json
+https://SEU-DOMINIO/wp-json/noveflix-stremio/v1/health
+https://SEU-DOMINIO/wp-json/noveflix-stremio/v1/catalog?category=novelas&page=1&per_page=5
 ```
 
-## Observação sobre o primeiro episódio
+O novo formato de ID é baseado no ID real do post do WordPress:
 
-O HAR enviado confirma diretamente o episódio 63. A existência dos episódios anteriores e posteriores depende das URLs do CDN. Ajuste `firstEpisode` caso a numeração real não comece em 1.
+```text
+noveflix:novelas-1234
+noveflix:novelas-1234:1:1
+```
+
+Isso evita a interpretação incorreta de IDs pelo Fusion e mantém os links estáveis mesmo quando o título muda.
